@@ -86,6 +86,40 @@ async def search_products(
     return results
 
 
+@router.get("/stats")
+async def get_product_stats():
+    total_count = 0
+    price_sum = 0.0
+    priced_count = 0
+    min_price: Optional[float] = None
+    max_price: Optional[float] = None
+    category_count: dict[str, int] = {}
+
+    cursor = products_collection.find()
+    async for product in cursor:
+        total_count += 1
+
+        price = product.get("price")
+        if isinstance(price, (int, float)):
+            price_sum += price
+            priced_count += 1
+            if min_price is None or price < min_price:
+                min_price = price
+            if max_price is None or price > max_price:
+                max_price = price
+
+        category = product.get("category") or "Uncategorized"
+        category_count[category] = category_count.get(category, 0) + 1
+
+    return {
+        "totalCount": total_count,
+        "averagePrice": (price_sum / priced_count) if priced_count else 0,
+        "minPrice": min_price if min_price is not None else 0,
+        "maxPrice": max_price if max_price is not None else 0,
+        "categoryCount": category_count,
+    }
+
+
 @router.get("/{product_id}")
 async def get_product_by_id(product_id: str):
     if not ObjectId.is_valid(product_id):
