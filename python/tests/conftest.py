@@ -7,6 +7,7 @@ from httpx import ASGITransport, AsyncClient
 from mongomock_motor import AsyncMongoMockClient
 
 from routes import products as products_module
+from security.jwt_handler import get_current_user
 
 
 SEED_PRODUCTS = [
@@ -48,6 +49,7 @@ async def client():
     products_module.products_collection = fake_products
 
     app = FastAPI()
+    app.dependency_overrides[get_current_user] = lambda: {"_id": "test-user", "username": "tester", "role": "admin"}
     app.include_router(products_module.router)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
