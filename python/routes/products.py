@@ -43,13 +43,30 @@ def format_product(product: dict) -> dict:
 
 
 @router.get("")
-async def get_all_products():
-    print("Fetching all products")
-    products = []
+async def get_all_products(
+    page: int = Query(1, ge=1),
+    limit: int = Query(10, ge=1, le=100),
+    sort: Optional[str] = None,
+    order: str = "asc",
+):
+    total = await products_collection.count_documents({})
+
     cursor = products_collection.find()
+    if sort:
+        direction = -1 if order.lower() == "desc" else 1
+        cursor = cursor.sort(sort, direction)
+    cursor = cursor.skip((page - 1) * limit).limit(limit)
+
+    data = []
     async for product in cursor:
-        products.append(product_to_response(product))
-    return products
+        data.append(product_to_response(product))
+
+    return {
+        "data": data,
+        "page": page,
+        "limit": limit,
+        "total": total,
+    }
 
 
 @router.get("/search")
