@@ -22,6 +22,10 @@ class ProductRequest(BaseModel):
     stock: Optional[int] = None
 
 
+class StockUpdateRequest(BaseModel):
+    stock: int
+
+
 class ProductResponse(BaseModel):
     id: str
     name: str

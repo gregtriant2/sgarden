@@ -3,6 +3,7 @@ from typing import Iterable
 
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import JSONResponse
 
 from database import orders_collection, products_collection
 from models.order import OrderItem, OrderRequest
@@ -37,7 +38,41 @@ def _order_to_response(order: dict) -> dict:
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_order(request: OrderRequest, current_user: dict = Depends(get_current_user)):
+    # Aggregate quantities by productId so duplicate items in a single order
+    # don't bypass the per-product stock check.
+    needed: dict[str, int] = {}
+    for item in request.items:
+        if not ObjectId.is_valid(item.productId):
+            continue
+        needed[item.productId] = needed.get(item.productId, 0) + item.quantity
+
+    insufficient: dict[str, str] = {}
+    next_stock: dict[str, int] = {}
+    for product_id_str, qty in needed.items():
+        product = await products_collection.find_one({"_id": ObjectId(product_id_str)})
+        if product is None:
+            continue
+        available = product.get("stock") or 0
+        if available < qty:
+            insufficient[product_id_str] = (
+                f"Requested {qty} but only {available} in stock"
+            )
+        else:
+            next_stock[product_id_str] = available - qty
+
+    if insufficient:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"message": "Insufficient stock", "errors": insufficient},
+        )
+
     now = datetime.utcnow()
+    for product_id_str, new_stock in next_stock.items():
+        await products_collection.update_one(
+            {"_id": ObjectId(product_id_str)},
+            {"$set": {"stock": new_stock, "updatedAt": now}},
+        )
+
     order_doc = {
         "items": [item.model_dump() for item in request.items],
         "total": await _calculate_total(request.items),
