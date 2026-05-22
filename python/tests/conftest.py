@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from mongomock_motor import AsyncMongoMockClient
 
+from routes import orders as orders_module
 from routes import products as products_module
 from security.jwt_handler import get_current_user
 
@@ -34,25 +35,48 @@ def seed_products():
     return SEED_PRODUCTS
 
 
-@pytest_asyncio.fixture
-async def client():
+async def _build_client(authenticated: bool):
     mock_client = AsyncMongoMockClient()
     mock_db = mock_client["sgarden_test"]
     fake_products = mock_db["products"]
+    fake_orders = mock_db["orders"]
 
     now = datetime.utcnow()
     await fake_products.insert_many(
         [{**p, "createdAt": now, "updatedAt": now} for p in SEED_PRODUCTS]
     )
 
-    original = products_module.products_collection
+    orig_products = products_module.products_collection
+    orig_orders = orders_module.orders_collection
     products_module.products_collection = fake_products
+    orders_module.products_collection = fake_products  # used by total calc
+    orders_module.orders_collection = fake_orders
 
     app = FastAPI()
-    app.dependency_overrides[get_current_user] = lambda: {"_id": "test-user", "username": "tester", "role": "admin"}
+    if authenticated:
+        app.dependency_overrides[get_current_user] = lambda: {
+            "_id": "test-user",
+            "username": "tester",
+            "role": "admin",
+        }
     app.include_router(products_module.router)
+    app.include_router(orders_module.router)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         yield ac
 
-    products_module.products_collection = original
+    products_module.products_collection = orig_products
+    orders_module.products_collection = orig_products
+    orders_module.orders_collection = orig_orders
+
+
+@pytest_asyncio.fixture
+async def client():
+    async for c in _build_client(authenticated=True):
+        yield c
+
+
+@pytest_asyncio.fixture
+async def unauth_client():
+    async for c in _build_client(authenticated=False):
+        yield c
