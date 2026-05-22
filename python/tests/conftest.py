@@ -7,6 +7,7 @@ from httpx import ASGITransport, AsyncClient
 from mongomock_motor import AsyncMongoMockClient
 
 from routes import alerts as alerts_module
+from routes import analytics as analytics_module
 from routes import orders as orders_module
 from routes import products as products_module
 from security.jwt_handler import get_current_user
@@ -52,11 +53,15 @@ async def _build_client(authenticated: bool):
     orig_orders = orders_module.orders_collection
     orig_alerts_products = alerts_module.products_collection
     orig_alerts_settings = alerts_module.settings_collection
+    orig_analytics_orders = analytics_module.orders_collection
+    orig_analytics_products = analytics_module.products_collection
     products_module.products_collection = fake_products
     orders_module.products_collection = fake_products  # used by total calc
     orders_module.orders_collection = fake_orders
     alerts_module.products_collection = fake_products
     alerts_module.settings_collection = fake_settings
+    analytics_module.orders_collection = fake_orders
+    analytics_module.products_collection = fake_products
 
     app = FastAPI()
     if authenticated:
@@ -68,6 +73,7 @@ async def _build_client(authenticated: bool):
     app.include_router(products_module.router)
     app.include_router(orders_module.router)
     app.include_router(alerts_module.router)
+    app.include_router(analytics_module.router)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         yield ac
@@ -77,6 +83,8 @@ async def _build_client(authenticated: bool):
     orders_module.orders_collection = orig_orders
     alerts_module.products_collection = orig_alerts_products
     alerts_module.settings_collection = orig_alerts_settings
+    analytics_module.orders_collection = orig_analytics_orders
+    analytics_module.products_collection = orig_analytics_products
 
 
 @pytest_asyncio.fixture
