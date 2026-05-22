@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from mongomock_motor import AsyncMongoMockClient
 
+from routes import alerts as alerts_module
 from routes import orders as orders_module
 from routes import products as products_module
 from security.jwt_handler import get_current_user
@@ -40,6 +41,7 @@ async def _build_client(authenticated: bool):
     mock_db = mock_client["sgarden_test"]
     fake_products = mock_db["products"]
     fake_orders = mock_db["orders"]
+    fake_settings = mock_db["settings"]
 
     now = datetime.utcnow()
     await fake_products.insert_many(
@@ -48,9 +50,13 @@ async def _build_client(authenticated: bool):
 
     orig_products = products_module.products_collection
     orig_orders = orders_module.orders_collection
+    orig_alerts_products = alerts_module.products_collection
+    orig_alerts_settings = alerts_module.settings_collection
     products_module.products_collection = fake_products
     orders_module.products_collection = fake_products  # used by total calc
     orders_module.orders_collection = fake_orders
+    alerts_module.products_collection = fake_products
+    alerts_module.settings_collection = fake_settings
 
     app = FastAPI()
     if authenticated:
@@ -61,6 +67,7 @@ async def _build_client(authenticated: bool):
         }
     app.include_router(products_module.router)
     app.include_router(orders_module.router)
+    app.include_router(alerts_module.router)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         yield ac
@@ -68,6 +75,8 @@ async def _build_client(authenticated: bool):
     products_module.products_collection = orig_products
     orders_module.products_collection = orig_products
     orders_module.orders_collection = orig_orders
+    alerts_module.products_collection = orig_alerts_products
+    alerts_module.settings_collection = orig_alerts_settings
 
 
 @pytest_asyncio.fixture
