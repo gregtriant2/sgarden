@@ -26,6 +26,10 @@ python/.venv/
 dist/
 build/
 
+# Python tests (untracked for now)
+python/tests/
+python/pytest.ini
+
 # OS
 .DS_Store
 Thumbs.db
