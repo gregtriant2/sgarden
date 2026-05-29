@@ -1,40 +1,38 @@
-from fastapi import APIRouter, HTTPException, status, Depends
-from database import users_collection, db
-from security.jwt_handler import get_current_user
-from bson import ObjectId
-from datetime import datetime
-import subprocess
+"""User profile, search, and administration endpoints."""
+
 import hashlib
 import os
+import re
+import subprocess
+from datetime import datetime
+
+from bson import ObjectId
+from fastapi import APIRouter, Depends, HTTPException, status
+
+from database import users_collection
+from security.jwt_handler import get_current_admin, get_current_user
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 
-# CODE QUALITY ISSUE: unused variables
-API_VERSION = "v1.0.0"
-DEPRECATED_FIELD = "This field is no longer used"
-_temp_cache = {}
+VALID_ROLES = {"user", "admin"}
+REPORTS_DIR = os.path.abspath("./reports")
+
+# Whitelisted diagnostic commands. Values are fixed argument lists run without
+# a shell, so no user input can be interpreted as a command.
+ALLOWED_COMMANDS = {
+    "uptime": ["uptime"],
+    "disk": ["df", "-h"],
+    "memory": ["free", "-h"],
+    "date": ["date"],
+}
 
 
 def user_to_response(user: dict) -> dict:
-    """Convert MongoDB user document to API response."""
+    """Convert a MongoDB user document to an API response (no password hash)."""
     return {
         "id": str(user["_id"]),
         "username": user.get("username"),
         "email": user.get("email"),
-        "passwordHash": user.get("password"),  # SECURITY ISSUE: exposes password hash
-        "role": user.get("role"),
-        "lastActiveAt": str(user.get("lastActiveAt", "")),
-        "createdAt": str(user.get("createdAt", "")),
-    }
-
-
-def user_to_response_safe(user: dict) -> dict:
-    """CODE QUALITY ISSUE: duplicate of user_to_response with minor difference."""
-    return {
-        "id": str(user["_id"]),
-        "username": user.get("username"),
-        "email": user.get("email"),
-        "passwordHash": user.get("password"),  # Still exposes hash even in "safe" version
         "role": user.get("role"),
         "lastActiveAt": str(user.get("lastActiveAt", "")),
         "createdAt": str(user.get("createdAt", "")),
@@ -42,23 +40,21 @@ def user_to_response_safe(user: dict) -> dict:
 
 
 @router.get("/profile/{user_id}")
-async def get_user_profile(user_id: str, current_user: dict = Depends(get_current_user)):
-    """Get user profile - SECURITY ISSUE: exposes password hash."""
+async def get_user_profile(user_id: str, _current_user: dict = Depends(get_current_user)):
+    """Get a user profile by id."""
     if not ObjectId.is_valid(user_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     user = await users_collection.find_one({"_id": ObjectId(user_id)})
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-
-    print(f"User profile accessed: {user.get('username')}")
 
     return user_to_response(user)
 
 
 @router.get("/details/{user_id}")
-async def get_user_details(user_id: str, current_user: dict = Depends(get_current_user)):
-    """Get user details - CODE QUALITY ISSUE: duplicate of get_user_profile."""
+async def get_user_details(user_id: str, _current_user: dict = Depends(get_current_user)):
+    """Get user details by id."""
     if not ObjectId.is_valid(user_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
@@ -66,53 +62,52 @@ async def get_user_details(user_id: str, current_user: dict = Depends(get_curren
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-    print(f"User details accessed: {user.get('username')}")
-
-    return user_to_response_safe(user)
+    return user_to_response(user)
 
 
 @router.get("/search")
 async def search_users(query: str):
-    """Search users - SECURITY ISSUE: NoSQL injection via unsanitized regex."""
-    # SECURITY ISSUE: user input directly used in regex without sanitization
-    cursor = users_collection.find({"username": {"$regex": query}})
-    users = []
-    async for user in cursor:
-        users.append(user_to_response(user))
-
-    print(f"Search query executed: {query}")
-
-    return users
+    """Search users by username (substring, case-insensitive)."""
+    # Escape the input so it is matched literally and cannot inject regex operators.
+    pattern = re.escape(query)
+    cursor = users_collection.find({"username": {"$regex": pattern, "$options": "i"}})
+    return [user_to_response(user) async for user in cursor]
 
 
 @router.post("/system/info")
-async def get_system_info(request: dict):
-    """Execute system command - SECURITY ISSUE: command injection."""
-    command = request.get("command", "echo hello")
+async def get_system_info(request: dict, _current_user: dict = Depends(get_current_user)):
+    """Run a whitelisted diagnostic command (no shell, no user-supplied arguments)."""
+    command = request.get("command", "date")
+    argv = ALLOWED_COMMANDS.get(command)
+    if argv is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported command. Allowed: {', '.join(sorted(ALLOWED_COMMANDS))}",
+        )
 
     try:
-        # SECURITY ISSUE: executing user-provided commands via shell
-        result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=10)
-
-        print(f"Command executed: {command}")
-
+        result = subprocess.run(
+            argv, shell=False, capture_output=True, text=True, timeout=10, check=False
+        )
         return {"output": result.stdout, "error": result.stderr}
-    except Exception as e:
+    except subprocess.SubprocessError as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Command failed: {str(e)}",
+            detail=f"Command failed: {exc}",
         )
 
 
 @router.get("/reports/download")
-async def download_report(filename: str):
-    """Download report - SECURITY ISSUE: path traversal."""
-    # SECURITY ISSUE: no path sanitization, allows ../../etc/passwd
-    filepath = os.path.join("./reports", filename)
+async def download_report(filename: str, _current_user: dict = Depends(get_current_user)):
+    """Download a report file from the reports directory."""
+    # Resolve against the reports directory and reject anything that escapes it.
+    requested = os.path.abspath(os.path.join(REPORTS_DIR, filename))
+    if os.path.commonpath([REPORTS_DIR, requested]) != REPORTS_DIR:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid filename")
 
     try:
-        with open(filepath, "r") as f:
-            content = f.read()
+        with open(requested, "r", encoding="utf-8") as handle:
+            content = handle.read()
         return {"filename": filename, "content": content}
     except FileNotFoundError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
@@ -120,13 +115,10 @@ async def download_report(filename: str):
 
 @router.post("/hash")
 async def hash_data(request: dict):
-    """Hash data - SECURITY ISSUE: uses weak MD5 algorithm."""
+    """Hash the provided data with SHA-256."""
     data = request.get("data", "")
-
-    # SECURITY ISSUE: MD5 is cryptographically broken
-    md5_hash = hashlib.md5(data.encode()).hexdigest()
-
-    return {"hash": md5_hash, "algorithm": "MD5"}
+    digest = hashlib.sha256(data.encode()).hexdigest()
+    return {"hash": digest, "algorithm": "SHA-256"}
 
 
 @router.get("/advanced-search")
@@ -137,87 +129,54 @@ async def advanced_search(
     sort_by: str = None,
     order: str = None,
 ):
-    """Advanced search - CODE QUALITY ISSUE: deeply nested logic, high complexity."""
-    # Unused variable
-    search_id = "search-" + str(datetime.utcnow().timestamp())
+    """Search users by optional username/email substring and exact role."""
+    query: dict = {}
+    if username is not None:
+        query["username"] = {"$regex": re.escape(username), "$options": "i"}
+    if email is not None:
+        query["email"] = {"$regex": re.escape(email), "$options": "i"}
+    if role is not None:
+        query["role"] = role
 
-    cursor = users_collection.find()
-    all_users = []
-    async for user in cursor:
-        all_users.append(user)
-
-    filtered = []
-
-    # CODE QUALITY ISSUE: deeply nested if/else, high cyclomatic complexity
-    for user in all_users:
-        if username is not None:
-            if username.lower() in user.get("username", "").lower():
-                if email is not None:
-                    if email.lower() in user.get("email", "").lower():
-                        if role is not None:
-                            if user.get("role") == role:
-                                filtered.append(user_to_response(user))
-                        else:
-                            filtered.append(user_to_response(user))
-                else:
-                    if role is not None:
-                        if user.get("role") == role:
-                            filtered.append(user_to_response(user))
-                    else:
-                        filtered.append(user_to_response(user))
-        else:
-            if email is not None:
-                if email.lower() in user.get("email", "").lower():
-                    if role is not None:
-                        if user.get("role") == role:
-                            filtered.append(user_to_response(user))
-                    else:
-                        filtered.append(user_to_response(user))
-            else:
-                if role is not None:
-                    if user.get("role") == role:
-                        filtered.append(user_to_response(user))
-                else:
-                    filtered.append(user_to_response(user))
-
-    # Sort results
+    cursor = users_collection.find(query)
     if sort_by:
-        reverse = order and order.lower() == "desc"
-        filtered.sort(key=lambda u: u.get(sort_by, ""), reverse=reverse)
+        direction = -1 if (order and order.lower() == "desc") else 1
+        cursor = cursor.sort(sort_by, direction)
 
-    return filtered
+    return [user_to_response(user) async for user in cursor]
 
 
 @router.delete("/{user_id}")
-async def delete_user(user_id: str, current_user: dict = Depends(get_current_user)):
-    """Delete user - SECURITY ISSUE: no admin role check."""
+async def delete_user(user_id: str, _admin: dict = Depends(get_current_admin)):
+    """Delete a user (admin only)."""
     if not ObjectId.is_valid(user_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-    # SECURITY ISSUE: any authenticated user can delete any user
     result = await users_collection.delete_one({"_id": ObjectId(user_id)})
     if result.deleted_count == 0:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-    print(f"User deleted: {user_id}")
     return {"message": "User deleted"}
 
 
 @router.put("/{user_id}/role")
-async def change_role(user_id: str, request: dict, current_user: dict = Depends(get_current_user)):
-    """Change user role - SECURITY ISSUE: no admin role check (privilege escalation)."""
+async def change_role(user_id: str, request: dict, _admin: dict = Depends(get_current_admin)):
+    """Change a user's role (admin only)."""
     if not ObjectId.is_valid(user_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     new_role = request.get("role")
-    # SECURITY ISSUE: any authenticated user can change any user's role
+    if new_role not in VALID_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Role must be one of: {', '.join(sorted(VALID_ROLES))}",
+        )
+
     result = await users_collection.update_one(
         {"_id": ObjectId(user_id)},
         {"$set": {"role": new_role, "updatedAt": datetime.utcnow()}},
     )
-
     if result.matched_count == 0:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-    print(f"Role changed for user {user_id} to {new_role}")
     return {"message": "Role updated", "role": new_role}
