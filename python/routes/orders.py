@@ -123,7 +123,9 @@ async def get_order(order_id: str, _current_user: dict = Depends(get_current_use
 
 
 @router.put("/{order_id}")
-async def update_order(order_id: str, request: OrderRequest, _current_user: dict = Depends(get_current_user)):
+async def update_order(
+    order_id: str, request: OrderRequest, _current_user: dict = Depends(get_current_user)
+):
     if not ObjectId.is_valid(order_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
 

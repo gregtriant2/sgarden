@@ -13,11 +13,6 @@ from routes.orders import router as orders_router
 from routes.alerts import router as alerts_router
 from routes.analytics import router as analytics_router
 
-# CODE QUALITY ISSUE: unused variable
-APP_NAME = "SGarden Inventory API"
-DEBUG_MODE = True
-unused_config = {"key": "value", "secret": "not-so-secret"}
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

@@ -3,7 +3,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, status, Depends, Query
 from fastapi.responses import JSONResponse
-from models.product import ProductRequest, ProductResponse, StockUpdateRequest
+from models.product import ProductRequest, StockUpdateRequest
 from database import products_collection
 from security.jwt_handler import get_current_user
 from bson import ObjectId
@@ -185,7 +185,9 @@ async def create_product(request: ProductRequest, _current_user: dict = Depends(
 
 
 @router.put("/{product_id}")
-async def update_product(product_id: str, request: ProductRequest, _current_user: dict = Depends(get_current_user)):
+async def update_product(
+    product_id: str, request: ProductRequest, _current_user: dict = Depends(get_current_user)
+):
     errors = _validate_product_input(request, is_create=False)
     if errors:
         return _validation_failed(errors)

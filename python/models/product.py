@@ -4,6 +4,8 @@ from datetime import datetime
 
 
 class ProductInDB(BaseModel):
+    """Product document as stored in MongoDB."""
+
     id: Optional[str] = Field(None, alias="_id")
     name: str
     description: Optional[str] = None
@@ -15,6 +17,8 @@ class ProductInDB(BaseModel):
 
 
 class ProductRequest(BaseModel):
+    """Request body for creating or updating a product."""
+
     name: Optional[str] = None
     description: Optional[str] = None
     category: Optional[str] = None
@@ -23,10 +27,14 @@ class ProductRequest(BaseModel):
 
 
 class StockUpdateRequest(BaseModel):
+    """Request body for updating a product's stock level."""
+
     stock: int
 
 
 class ProductResponse(BaseModel):
+    """Product representation returned by the API."""
+
     id: str
     name: str
     description: Optional[str] = None

@@ -4,7 +4,11 @@ from config import settings
 client = AsyncIOMotorClient(settings.database_url)
 
 # Extract database name from URL, default to "sgarden"
-db_name = settings.database_url.rsplit("/", 1)[-1].split("?")[0] if "/" in settings.database_url else "sgarden"
+db_name = (
+    settings.database_url.rsplit("/", 1)[-1].split("?")[0]
+    if "/" in settings.database_url
+    else "sgarden"
+)
 db = client[db_name]
 
 users_collection = db["users"]
