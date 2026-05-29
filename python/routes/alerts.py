@@ -1,3 +1,5 @@
+"""Low-stock alert endpoints and threshold configuration."""
+
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -11,7 +13,9 @@ DEFAULT_THRESHOLD = 20
 SETTINGS_DOC_ID = "alerts"
 
 
-class ThresholdRequest(BaseModel):
+class ThresholdRequest(BaseModel):  # pylint: disable=too-few-public-methods
+    """Request body for updating the low-stock alert threshold."""
+
     threshold: int
 
 
@@ -32,7 +36,8 @@ def _severity(stock: int, threshold: int) -> str:
 
 
 @router.get("")
-async def list_alerts(current_user: dict = Depends(get_current_user)):
+async def list_alerts(_current_user: dict = Depends(get_current_user)):
+    """Return products below the configured stock threshold, with severity."""
     threshold = await _current_threshold()
     alerts = []
     cursor = products_collection.find({"stock": {"$lt": threshold}})
@@ -50,12 +55,16 @@ async def list_alerts(current_user: dict = Depends(get_current_user)):
 @router.put("/threshold")
 async def set_threshold(
     request: ThresholdRequest,
-    current_user: dict = Depends(get_current_user),
+    _current_user: dict = Depends(get_current_user),
 ):
+    """Update the low-stock alert threshold (must be non-negative)."""
     if request.threshold < 0:
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
-            content={"message": "Validation failed", "errors": {"threshold": "Threshold must be non-negative"}},
+            content={
+                "message": "Validation failed",
+                "errors": {"threshold": "Threshold must be non-negative"},
+            },
         )
 
     await settings_collection.update_one(
